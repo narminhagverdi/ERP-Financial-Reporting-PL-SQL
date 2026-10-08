@@ -1,0 +1,540 @@
+CREATE TABLE GL_JE_HEADERS(JE_HEADER_ID NUMBER PRIMARY KEY,
+                           JE_NAME    VARCHAR2(100) NOT NULL,
+                           PERIOD_NAME  VARCHAR2(15)  NOT NULL,
+                           DATE_CREATED DATE DEFAULT SYSDATE NOT NULL,
+                           DESCRIPTION  VARCHAR2(240),
+                           STATUS     VARCHAR2(20) DEFAULT 'POSTED',
+                           CREATED_BY    VARCHAR2(50),
+                           CONSTRAINT CHK_PERIOD CHECK (PERIOD_NAME IS NOT NULL),
+                           CONSTRAINT CHK_HEADER_STATUS CHECK (STATUS IN ('POSTED','DRAFT','REVERSED')));
+
+CREATE TABLE GL_JE_LINES(JE_LINE_ID   NUMBER PRIMARY KEY,
+                         JE_HEADER_ID  NUMBER NOT NULL,
+                         ACCOUNT_CODE  VARCHAR2(30) NOT NULL,
+                         DEBIT_AMOUNT  NUMBER(12,2) DEFAULT 0,
+                         CREDIT_AMOUNT NUMBER(12,2) DEFAULT 0,
+                         DESCRIPTION  VARCHAR2(200),
+                         LINE_NUM     NUMBER,
+                         CURRENCY_CODE  VARCHAR2(10) DEFAULT 'AZN',
+                         CONSTRAINT FK_GL_HEADER FOREIGN KEY (JE_HEADER_ID) REFERENCES GL_JE_HEADERS(JE_HEADER_ID),
+                         CONSTRAINT CHK_DEBIT_POSITIVE CHECK (DEBIT_AMOUNT >= 0),
+                         CONSTRAINT CHK_CREDIT_POSITIVE CHECK (CREDIT_AMOUNT >= 0),
+                         CONSTRAINT CHK_DEBIT_CREDIT CHECK (NOT (DEBIT_AMOUNT > 0 AND CREDIT_AMOUNT > 0)));
+
+CREATE TABLE AP_VENDORS(VENDOR_ID   NUMBER PRIMARY KEY,
+                        VENDOR_NAME  VARCHAR2(150) NOT NULL UNIQUE,
+                        VENDOR_CODE  VARCHAR2(30) UNIQUE NOT NULL,
+                        VENDOR_TYPE  VARCHAR2(30) NOT NULL,
+                        PHONE_NUMBER VARCHAR2(30),
+                        EMAIL     VARCHAR2(120),
+                        ADDRESS     VARCHAR2(250),
+                        TAX_NUMBER   VARCHAR2(50) UNIQUE,
+                        STATUS     VARCHAR2(20) DEFAULT 'ACTIVE',
+                        CREATED_DATE  DATE DEFAULT SYSDATE,
+                        CONSTRAINT CHK_VENDOR_TYPE   CHECK (VENDOR_TYPE IN ('LOCAL','FOREIGN','SERVICE')),
+                        CONSTRAINT CHK_VENDOR_STATUS CHECK (STATUS IN ('ACTIVE','INACTIVE')));
+
+CREATE TABLE AP_INVOICES_ALL(INVOICE_ID  NUMBER PRIMARY KEY,
+                             VENDOR_ID    NUMBER NOT NULL,
+                             INVOICE_NUM    VARCHAR2(50) UNIQUE NOT NULL,
+                             INVOICE_AMOUNT  NUMBER(12,2) NOT NULL,
+                             PAYMENT_STATUS  VARCHAR2(30) NOT NULL,
+                             INVOICE_DATE   DATE DEFAULT SYSDATE,
+                             DESCRIPTION     VARCHAR2(250),
+                             CONSTRAINT FK_AP_VENDOR FOREIGN KEY (VENDOR_ID) REFERENCES AP_VENDORS(VENDOR_ID),
+                             CONSTRAINT CHK_INVOICE_AMOUNT CHECK (INVOICE_AMOUNT > 0),
+                             CONSTRAINT CHK_PAYMENT_STATUS CHECK (PAYMENT_STATUS IN ('PAID','UNPAID','PENDING')));
+
+CREATE TABLE AR_CUSTOMERS(CUSTOMER_ID    NUMBER PRIMARY KEY,
+                          CUSTOMER_NAME   VARCHAR2(100) NOT NULL,
+                          CUSTOMER_BALANCE  NUMBER(12,2) DEFAULT 0,
+                          CUSTOMER_EMAIL  VARCHAR2(100) UNIQUE,
+                          CUSTOMER_TYPE   VARCHAR2(30),
+                          CREATED_DATE    DATE DEFAULT SYSDATE,
+                          CONSTRAINT CHK_CUSTOMER_BALANCE CHECK (CUSTOMER_BALANCE >= 0));
+
+CREATE TABLE AR_CASH_RECEIPTS(RECEIPT_ID   NUMBER PRIMARY KEY,
+                              CUSTOMER_ID   NUMBER NOT NULL,
+                              RECEIPT_NUMBER VARCHAR2(50) UNIQUE NOT NULL,
+                              RECEIPT_DATE  DATE DEFAULT SYSDATE,
+                              RECEIPT_AMOUNT NUMBER(12,2) NOT NULL,
+                              PAYMENT_METHOD  VARCHAR2(30),
+                              RECEIPT_STATUS  VARCHAR2(20) DEFAULT 'CONFIRMED',
+                              COMMENTS        VARCHAR2(250),
+                              CONSTRAINT FK_AR_CUSTOMER FOREIGN KEY (CUSTOMER_ID) REFERENCES AR_CUSTOMERS(CUSTOMER_ID),
+                              CONSTRAINT CHK_RECEIPT_AMOUNT CHECK (RECEIPT_AMOUNT > 0),
+                              CONSTRAINT CHK_PAYMENT_METHOD CHECK (PAYMENT_METHOD IN ('CASH','BANK','CARD','TRANSFER')),
+                              CONSTRAINT CHK_RECEIPT_STATUS CHECK (RECEIPT_STATUS IN ('CONFIRMED','PENDING','CANCELLED')));
+
+CREATE TABLE ERROR_LOG(LOG_ID  NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                      LOG_DATE   DATE DEFAULT SYSDATE,
+                      PROCEDURE_NAME VARCHAR2(100),
+                      ERROR_CODE    VARCHAR2(20),
+                      ERROR_MESSAGE VARCHAR2(4000));
+
+COMMIT;
+
+SELECT * FROM AP_VENDORS FOR UPDATE;
+SELECT * FROM AR_CUSTOMERS FOR UPDATE;
+SELECT * FROM GL_JE_HEADERS FOR UPDATE;
+SELECT * FROM GL_JE_LINES FOR UPDATE;
+SELECT * FROM AP_INVOICES_ALL FOR UPDATE;
+SELECT * FROM AR_CASH_RECEIPTS FOR UPDATE;
+
+
+SELECT 'AP_VENDORS' TABLE_, COUNT(*) COUNT_ FROM AP_VENDORS
+UNION ALL SELECT 'AR_CUSTOMERS', COUNT(*) FROM AR_CUSTOMERS
+UNION ALL SELECT 'GL_JE_HEADERS', COUNT(*) FROM GL_JE_HEADERS
+UNION ALL SELECT 'GL_JE_LINES', COUNT(*) FROM GL_JE_LINES
+UNION ALL SELECT 'AP_INVOICES_ALL', COUNT(*) FROM AP_INVOICES_ALL
+UNION ALL SELECT 'AR_CASH_RECEIPTS', COUNT(*) FROM AR_CASH_RECEIPTS;
+
+
+
+
+CREATE INDEX IDX_GLJL_HEADER_ID ON GL_JE_LINES(JE_HEADER_ID);
+CREATE INDEX IDX_APINV_VENDOR_ID ON AP_INVOICES_ALL(VENDOR_ID);
+CREATE INDEX IDX_ARCR_CUSTOMER_ID ON AR_CASH_RECEIPTS(CUSTOMER_ID);
+
+CREATE INDEX IDX_GLJH_PERIOD ON GL_JE_HEADERS(PERIOD_NAME);
+CREATE INDEX IDX_GLJL_ACCOUNT ON GL_JE_LINES(ACCOUNT_CODE);
+
+CREATE INDEX IDX_GLJL_ACC_HDR ON GL_JE_LINES(ACCOUNT_CODE, JE_HEADER_ID);
+
+CREATE INDEX IDX_APINV_STATUS ON AP_INVOICES_ALL(PAYMENT_STATUS);
+CREATE INDEX IDX_ARCR_STATUS ON AR_CASH_RECEIPTS(RECEIPT_STATUS);
+
+
+--burda header ve line 
+CREATE OR REPLACE VIEW VW_JOURNAL_ENTRY_DETAIL AS
+SELECT h.JE_HEADER_ID,
+       h.JE_NAME,
+       h.PERIOD_NAME,
+       h.DATE_CREATED       AS POSTING_DATE,
+       h.STATUS             AS HEADER_STATUS,
+       l.JE_LINE_ID,
+       l.LINE_NUM,
+       l.ACCOUNT_CODE,
+       l.DEBIT_AMOUNT,
+       l.CREDIT_AMOUNT,
+       l.CURRENCY_CODE,
+       NVL(l.DESCRIPTION, h.DESCRIPTION) AS DESCRIPTION 
+       FROM GL_JE_HEADERS h JOIN GL_JE_LINES l ON l.JE_HEADER_ID = h.JE_HEADER_ID;
+
+
+--period ve account code uzre debit ,cem kredit,xalis balans
+CREATE OR REPLACE VIEW VW_TRIAL_BALANCE AS
+SELECT h.PERIOD_NAME,
+       l.ACCOUNT_CODE,
+       SUM(l.DEBIT_AMOUNT)  AS TOTAL_DEBIT,
+       SUM(l.CREDIT_AMOUNT)  AS TOTAL_CREDIT,
+       SUM(l.DEBIT_AMOUNT - l.CREDIT_AMOUNT)  AS NET_BALANCE
+       FROM GL_JE_HEADERS h
+       JOIN GL_JE_LINES   l ON l.JE_HEADER_ID = h.JE_HEADER_ID
+       GROUP BY h.PERIOD_NAME, l.ACCOUNT_CODE;
+
+
+--trial balance uzerinde analitik funks
+CREATE OR REPLACE VIEW VW_LEDGER_SUMMARY AS
+SELECT ACCOUNT_CODE,
+       PERIOD_NAME,
+       TOTAL_DEBIT,
+       TOTAL_CREDIT,
+       NET_BALANCE,
+       SUM(NET_BALANCE) OVER (PARTITION BY ACCOUNT_CODE ORDER BY PERIOD_NAME
+       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS CUMULATIVE_BALANCE
+       FROM VW_TRIAL_BALANCE;
+
+
+ 
+CREATE OR REPLACE VIEW VW_AP_VENDOR_EXPOSURE AS
+SELECT v.VENDOR_ID,
+       v.VENDOR_NAME,
+       v.VENDOR_TYPE,
+       COUNT(i.INVOICE_ID)  AS TOTAL_INVOICES,
+       SUM(i.INVOICE_AMOUNT)   AS TOTAL_INVOICED,
+       SUM(CASE WHEN i.PAYMENT_STATUS = 'PAID' THEN i.INVOICE_AMOUNT ELSE 0 END)   AS TOTAL_PAID,
+       SUM(CASE WHEN i.PAYMENT_STATUS IN ('UNPAID','PENDING') THEN i.INVOICE_AMOUNT ELSE 0 END) AS TOTAL_OUTSTANDING
+       FROM AP_VENDORS v
+       LEFT JOIN AP_INVOICES_ALL i ON i.VENDOR_ID = v.VENDOR_ID
+       GROUP BY v.VENDOR_ID, v.VENDOR_NAME, v.VENDOR_TYPE;
+
+
+--müştəri balansı, aldığı ödənişlər, həm ümumi (RANK), həm öz tipində  reytinqi."
+CREATE OR REPLACE VIEW VW_AR_CUSTOMER_EXPOSURE AS
+SELECT c.CUSTOMER_ID,
+       c.CUSTOMER_NAME,
+       c.CUSTOMER_TYPE,
+       c.CUSTOMER_BALANCE,
+       NVL(SUM(r.RECEIPT_AMOUNT), 0)        AS TOTAL_RECEIVED,
+       RANK() OVER (ORDER BY c.CUSTOMER_BALANCE DESC)    AS BALANCE_RANK,
+       DENSE_RANK() OVER (PARTITION BY c.CUSTOMER_TYPE ORDER BY c.CUSTOMER_BALANCE DESC)  AS RANK_IN_TYPE
+       FROM AR_CUSTOMERS c
+       LEFT JOIN AR_CASH_RECEIPTS r  ON r.CUSTOMER_ID = c.CUSTOMER_ID AND r.RECEIPT_STATUS = 'CONFIRMED'
+       GROUP BY c.CUSTOMER_ID, c.CUSTOMER_NAME, c.CUSTOMER_TYPE, c.CUSTOMER_BALANCE;
+
+
+
+
+CREATE MATERIALIZED VIEW MV_TRIAL_BALANCE
+BUILD IMMEDIATE
+REFRESH COMPLETE ON DEMAND
+AS
+SELECT h.PERIOD_NAME,
+       l.ACCOUNT_CODE,
+       SUM(l.DEBIT_AMOUNT)     AS TOTAL_DEBIT,
+       SUM(l.CREDIT_AMOUNT)     AS TOTAL_CREDIT,
+       SUM(l.DEBIT_AMOUNT - l.CREDIT_AMOUNT)  AS NET_BALANCE
+       FROM GL_JE_HEADERS h
+       JOIN GL_JE_LINES   l ON l.JE_HEADER_ID = h.JE_HEADER_ID
+       GROUP BY h.PERIOD_NAME, l.ACCOUNT_CODE;
+
+CREATE INDEX IDX_MV_TB_ACC_PER ON MV_TRIAL_BALANCE(ACCOUNT_CODE, PERIOD_NAME);
+
+CREATE MATERIALIZED VIEW MV_AP_VENDOR_EXPOSURE
+BUILD IMMEDIATE
+REFRESH COMPLETE ON DEMAND
+AS
+SELECT v.VENDOR_ID,
+       v.VENDOR_NAME,
+       SUM(i.INVOICE_AMOUNT) AS TOTAL_INVOICED,
+       SUM(CASE WHEN i.PAYMENT_STATUS IN ('UNPAID','PENDING') THEN i.INVOICE_AMOUNT ELSE 0 END) AS TOTAL_OUTSTANDING
+       FROM AP_VENDORS v
+       JOIN AP_INVOICES_ALL i ON i.VENDOR_ID = v.VENDOR_ID
+       GROUP BY v.VENDOR_ID, v.VENDOR_NAME;
+
+
+--F_IS_JE_BALANCED — jurnal header-inin debit=credit olub-olmadığını yoxlayır,BALANCED,NOT BALANCED və ya xəta halındaERROR qaytarır.
+CREATE OR REPLACE PACKAGE PKG_GL_REPORTS AS
+FUNCTION F_IS_JE_BALANCED(p_je_header_id IN GL_JE_HEADERS.JE_HEADER_ID%TYPE)
+RETURN VARCHAR2;
+PROCEDURE P_VALIDATE_ALL_JOURNALS;
+PROCEDURE P_CREATE_JOURNAL_ENTRY(
+        p_header_id   IN GL_JE_HEADERS.JE_HEADER_ID%TYPE,
+        p_je_name     IN GL_JE_HEADERS.JE_NAME%TYPE,
+        p_period_name  IN GL_JE_HEADERS.PERIOD_NAME%TYPE,
+        p_debit_account IN GL_JE_LINES.ACCOUNT_CODE%TYPE,
+        p_credit_account IN GL_JE_LINES.ACCOUNT_CODE%TYPE,
+        p_amount     IN NUMBER,
+        p_description   IN VARCHAR2 DEFAULT NULL);
+        FUNCTION F_GET_ACCOUNT_BALANCE(
+        p_account_code IN VARCHAR2,
+        p_period_name  IN VARCHAR2) RETURN NUMBER;
+        END PKG_GL_REPORTS;
+
+
+CREATE OR REPLACE PACKAGE BODY PKG_GL_REPORTS AS
+FUNCTION F_IS_JE_BALANCED(p_je_header_id IN GL_JE_HEADERS.JE_HEADER_ID%TYPE)
+RETURN VARCHAR2
+IS
+v_debit   NUMBER := 0;
+v_credit NUMBER := 0;
+v_errcode VARCHAR2(20);
+v_errmsg   VARCHAR2(500);
+BEGIN
+  SELECT NVL(SUM(DEBIT_AMOUNT),0), NVL(SUM(CREDIT_AMOUNT),0)
+  iNTO v_debit, v_credit
+  FROM GL_JE_LINES
+  WHERE JE_HEADER_ID = p_je_header_id;
+    IF v_debit = v_credit THEN
+       RETURN 'BALANCED';
+         ELSE
+           RETURN 'NOT BALANCED';
+            END IF;
+             EXCEPTION
+              WHEN NO_DATA_FOUND THEN
+               RETURN 'NO LINES';
+                WHEN OTHERS THEN
+                 v_errcode := SQLCODE;
+                 v_errmsg  := SQLERRM;
+                 INSERT INTO ERROR_LOG(PROCEDURE_NAME, ERROR_CODE, ERROR_MESSAGE)
+                 VALUES ('F_IS_JE_BALANCED', v_errcode, v_errmsg);
+                 RETURN 'ERROR';
+                 END F_IS_JE_BALANCED;
+
+                  PROCEDURE P_VALIDATE_ALL_JOURNALS
+                  IS
+                  v_errcode  VARCHAR2(20);
+                  v_errmsg   VARCHAR2(500);
+                  BEGIN
+                   FOR rec IN (SELECT JE_HEADER_ID, JE_NAME FROM GL_JE_HEADERS ORDER BY JE_HEADER_ID) LOOP
+                  DBMS_OUTPUT.PUT_LINE(
+                  'JE_HEADER_ID=' || rec.JE_HEADER_ID ||
+                   '  JE_NAME=' || rec.JE_NAME ||
+                  '  STATUS=' || F_IS_JE_BALANCED(rec.JE_HEADER_ID) );
+                  END LOOP;
+                  EXCEPTION
+                   WHEN OTHERS THEN
+                  v_errcode := SQLCODE;
+                  v_errmsg  := SQLERRM;
+                  INSERT INTO ERROR_LOG(PROCEDURE_NAME, ERROR_CODE, ERROR_MESSAGE)
+                  VALUES ('P_VALIDATE_ALL_JOURNALS', v_errcode, v_errmsg);
+                   RAISE;
+                  END P_VALIDATE_ALL_JOURNALS;
+
+
+                  PROCEDURE P_CREATE_JOURNAL_ENTRY(
+                   p_header_id     IN GL_JE_HEADERS.JE_HEADER_ID%TYPE,
+                   p_je_name       IN GL_JE_HEADERS.JE_NAME%TYPE,
+                   p_period_name   IN GL_JE_HEADERS.PERIOD_NAME%TYPE,
+                    p_debit_account IN GL_JE_LINES.ACCOUNT_CODE%TYPE,
+                   p_credit_account IN GL_JE_LINES.ACCOUNT_CODE%TYPE,
+                   p_amount        IN NUMBER,
+                   p_description   IN VARCHAR2 DEFAULT NULL )
+                   IS
+                    v_next_line_id NUMBER;
+                    v_errcode      VARCHAR2(20);
+                     v_errmsg       VARCHAR2(500);
+                      BEGIN
+                        IF p_amount IS NULL OR p_amount <= 0 THEN
+                       RAISE_APPLICATION_ERROR(-20001, 'Məbləğ sıfırdan böyük olmalıdır (amount must be > 0)');
+                       END IF;
+
+        INSERT INTO GL_JE_HEADERS(JE_HEADER_ID, JE_NAME, PERIOD_NAME, DESCRIPTION)
+        VALUES (p_header_id, p_je_name, p_period_name, p_description);
+
+        SELECT NVL(MAX(JE_LINE_ID),0) + 1 INTO v_next_line_id FROM GL_JE_LINES;
+
+        INSERT INTO GL_JE_LINES(JE_LINE_ID, JE_HEADER_ID, ACCOUNT_CODE, DEBIT_AMOUNT, CREDIT_AMOUNT, DESCRIPTION, LINE_NUM)
+        VALUES (v_next_line_id, p_header_id, p_debit_account, p_amount, 0, p_description, 1);
+
+        INSERT INTO GL_JE_LINES(JE_LINE_ID, JE_HEADER_ID, ACCOUNT_CODE, DEBIT_AMOUNT, CREDIT_AMOUNT, DESCRIPTION, LINE_NUM)
+        VALUES (v_next_line_id + 1, p_header_id, p_credit_account, 0, p_amount, p_description, 2);
+
+        COMMIT;
+        DBMS_OUTPUT.PUT_LINE('Journal entry ' || p_je_name || ' uğurla yaradıldı.');
+
+          EXCEPTION
+           WHEN DUP_VAL_ON_INDEX THEN
+            v_errcode := SQLCODE;
+            v_errmsg  := SQLERRM;
+             ROLLBACK;
+              INSERT INTO ERROR_LOG(PROCEDURE_NAME, ERROR_CODE, ERROR_MESSAGE)
+              VALUES ('P_CREATE_JOURNAL_ENTRY', v_errcode, 'Duplicate ID: ' || v_errmsg);
+              RAISE_APPLICATION_ERROR(-20002, 'JE_HEADER_ID artıq mövcuddur');
+               WHEN OTHERS THEN
+                v_errcode := SQLCODE;
+                v_errmsg  := SQLERRM;
+                ROLLBACK;
+                INSERT INTO ERROR_LOG(PROCEDURE_NAME, ERROR_CODE, ERROR_MESSAGE)
+                VALUES ('P_CREATE_JOURNAL_ENTRY', v_errcode, v_errmsg);
+                RAISE;
+                END P_CREATE_JOURNAL_ENTRY;
+
+
+    FUNCTION F_GET_ACCOUNT_BALANCE(
+             p_account_code IN VARCHAR2,
+             p_period_name  IN VARCHAR2) RETURN NUMBER
+            IS
+             v_balance NUMBER := 0;
+             v_errcode VARCHAR2(20);
+             v_errmsg  VARCHAR2(500);
+    BEGIN
+        SELECT NVL(SUM(l.DEBIT_AMOUNT - l.CREDIT_AMOUNT), 0)
+        INTO v_balance
+        FROM GL_JE_LINES l
+        JOIN GL_JE_HEADERS h ON h.JE_HEADER_ID = l.JE_HEADER_ID
+        WHERE l.ACCOUNT_CODE = p_account_code
+          AND h.PERIOD_NAME = p_period_name;
+
+        RETURN v_balance;
+    EXCEPTION
+        WHEN OTHERS THEN
+            v_errcode := SQLCODE;
+            v_errmsg  := SQLERRM;
+            INSERT INTO ERROR_LOG(PROCEDURE_NAME, ERROR_CODE, ERROR_MESSAGE)
+            VALUES ('F_GET_ACCOUNT_BALANCE', v_errcode, v_errmsg);
+            RETURN NULL;
+              END F_GET_ACCOUNT_BALANCE;
+
+           END PKG_GL_REPORTS;
+
+
+
+SELECT PKG_GL_REPORTS.F_IS_JE_BALANCED(1) FROM DUAL;
+ SELECT PKG_GL_REPORTS.F_GET_ACCOUNT_BALANCE('1000','JAN-25') FROM DUAL;
+
+BEGIN
+    PKG_GL_REPORTS.P_VALIDATE_ALL_JOURNALS;
+END;
+
+
+
+CREATE OR REPLACE TRIGGER TRG_GLJL_VALIDATE_BALANCE
+FOR INSERT OR UPDATE ON GL_JE_LINES
+COMPOUND TRIGGER
+
+    TYPE t_header_ids IS TABLE OF GL_JE_LINES.JE_HEADER_ID%TYPE;
+    g_headers t_header_ids := t_header_ids();
+
+    AFTER EACH ROW IS
+    BEGIN
+        g_headers.EXTEND;
+        g_headers(g_headers.LAST) := :NEW.JE_HEADER_ID;
+    END AFTER EACH ROW;
+
+    AFTER STATEMENT IS
+        v_debit  NUMBER;
+        v_credit NUMBER;
+    BEGIN
+        FOR i IN 1 .. g_headers.COUNT LOOP
+            SELECT SUM(DEBIT_AMOUNT), SUM(CREDIT_AMOUNT)
+            INTO v_debit, v_credit
+            FROM GL_JE_LINES
+            WHERE JE_HEADER_ID = g_headers(i);
+
+            IF v_debit <> v_credit THEN
+                RAISE_APPLICATION_ERROR(-20010,
+                    'JE_HEADER_ID ' || g_headers(i) ||
+                    ' balanslaşmayıb: DEBIT=' || v_debit || ' CREDIT=' || v_credit);
+            END IF;
+        END LOOP;
+    END AFTER STATEMENT;
+
+END TRG_GLJL_VALIDATE_BALANCE;
+
+
+
+CREATE OR REPLACE TRIGGER TRG_ARCR_UPDATE_BALANCE
+AFTER INSERT ON AR_CASH_RECEIPTS
+FOR EACH ROW
+WHEN (NEW.RECEIPT_STATUS = 'CONFIRMED')
+BEGIN
+    UPDATE AR_CUSTOMERS
+    SET CUSTOMER_BALANCE = GREATEST(CUSTOMER_BALANCE - :NEW.RECEIPT_AMOUNT, 0)
+    WHERE CUSTOMER_ID = :NEW.CUSTOMER_ID;
+EXCEPTION
+    WHEN OTHERS THEN
+        INSERT INTO ERROR_LOG(PROCEDURE_NAME, ERROR_CODE, ERROR_MESSAGE)
+        VALUES ('TRG_ARCR_UPDATE_BALANCE', SQLCODE, SQLERRM);
+        RAISE;
+END;
+/
+
+
+CREATE OR REPLACE TRIGGER TRG_APINV_AUDIT_PAID
+AFTER UPDATE OF PAYMENT_STATUS ON AP_INVOICES_ALL
+FOR EACH ROW
+WHEN (NEW.PAYMENT_STATUS = 'PAID' AND OLD.PAYMENT_STATUS <> 'PAID')
+BEGIN
+    INSERT INTO ERROR_LOG(PROCEDURE_NAME, ERROR_CODE, ERROR_MESSAGE)
+    VALUES ('TRG_APINV_AUDIT_PAID', 'INFO',
+            'Invoice ' || :NEW.INVOICE_NUM || ' PAID olaraq işarələndi. Məbləğ: ' || :NEW.INVOICE_AMOUNT);
+END;
+/
+
+
+--Journal Entry Report
+SELECT * FROM VW_JOURNAL_ENTRY_DETAIL ORDER BY JE_HEADER_ID, LINE_NUM;
+
+-- Trial Balance Report
+SELECT * FROM VW_TRIAL_BALANCE ORDER BY PERIOD_NAME, ACCOUNT_CODE;
+
+--Ledger Summary Report
+SELECT * FROM VW_LEDGER_SUMMARY ORDER BY ACCOUNT_CODE, PERIOD_NAME;
+
+--Hər hesabın dövr daxilində hərəkət sırası (ROW_NUMBER)             
+SELECT
+    ACCOUNT_CODE,
+    PERIOD_NAME,
+    NET_BALANCE,
+    ROW_NUMBER() OVER (PARTITION BY ACCOUNT_CODE ORDER BY PERIOD_NAME) AS MOVEMENT_SEQ
+FROM VW_TRIAL_BALANCE
+ORDER BY ACCOUNT_CODE, PERIOD_NAME;
+
+-- Ən çox borcu olan vendor-lar 
+SELECT
+    VENDOR_NAME,
+    TOTAL_OUTSTANDING,
+    RANK() OVER (ORDER BY TOTAL_OUTSTANDING DESC) AS OUTSTANDING_RANK
+FROM VW_AP_VENDOR_EXPOSURE
+WHERE TOTAL_OUTSTANDING > 0
+ORDER BY OUTSTANDING_RANK;
+
+-- Müştəri tipi üzrə balans reytinqi vievda vardi.
+SELECT CUSTOMER_NAME, CUSTOMER_TYPE, CUSTOMER_BALANCE, BALANCE_RANK, RANK_IN_TYPE
+FROM VW_AR_CUSTOMER_EXPOSURE
+ORDER BY BALANCE_RANK;
+
+-- AP invoice-lərin vendor üzrə cəmi + ümumi cəmə görə faiz payı
+SELECT
+    v.VENDOR_NAME,
+    SUM(i.INVOICE_AMOUNT) AS VENDOR_TOTAL,
+    ROUND(SUM(i.INVOICE_AMOUNT) * 100 / SUM(SUM(i.INVOICE_AMOUNT)) OVER (), 2) AS PCT_OF_TOTAL
+FROM AP_VENDORS v
+JOIN AP_INVOICES_ALL i ON i.VENDOR_ID = v.VENDOR_ID
+GROUP BY v.VENDOR_NAME 
+ORDER BY VENDOR_TOTAL DESC;
+
+-- Debit=Credit validasiya nəticəsi 
+SELECT
+    h.JE_HEADER_ID,
+    h.JE_NAME,
+    h.PERIOD_NAME,
+    PKG_GL_REPORTS.F_IS_JE_BALANCED(h.JE_HEADER_ID) AS BALANCE_STATUS
+FROM GL_JE_HEADERS h
+ORDER BY h.JE_HEADER_ID;
+
+
+
+--DBMS_SCHEDULER JOBS
+
+-- Materialized view-ları hər gecə saat 01:00-da REFRESH edən job
+BEGIN
+    DBMS_SCHEDULER.CREATE_JOB (
+        job_name        => 'JOB_REFRESH_GL_MVIEWS',
+        job_type        => 'PLSQL_BLOCK',
+        job_action      => 'BEGIN
+                                DBMS_MVIEW.REFRESH(''MV_TRIAL_BALANCE'', ''C'');
+                                DBMS_MVIEW.REFRESH(''MV_AP_VENDOR_EXPOSURE'', ''C'');
+                             END;',
+        start_date      => SYSTIMESTAMP,
+        repeat_interval => 'FREQ=DAILY; BYHOUR=1; BYMINUTE=0',
+        enabled         => TRUE,
+        comments        => 'ERP maliyyə hesabatları üçün materialized view-ların gecəlik refresh-i');
+        END;
+
+
+-- Bütün jurnalların balans validasiyasını hər gün yoxlayan job
+-- (nəticələr ERROR_LOG / DBMS_OUTPUT-a yazılır, real mühitdə e-mail/alert əlavə oluna bilər)
+BEGIN
+    DBMS_SCHEDULER.CREATE_JOB (
+        job_name        => 'JOB_VALIDATE_JOURNALS',
+        job_type        => 'STORED_PROCEDURE',
+        job_action      => 'PKG_GL_REPORTS.P_VALIDATE_ALL_JOURNALS',
+        start_date      => SYSTIMESTAMP,
+        repeat_interval => 'FREQ=DAILY; BYHOUR=6; BYMINUTE=0',
+        enabled         => TRUE,
+        comments        => 'Hər gün səhər GL jurnallarının debit=credit balansını yoxlayır' );
+         END;
+
+
+
+SELECT JOB_NAME, STATE, LAST_START_DATE, NEXT_RUN_DATE FROM USER_SCHEDULER_JOBS;
+
+
+
+--  EXPLAIN PLAN 
+
+EXPLAIN PLAN SET STATEMENT_ID = 'TB_BEFORE' FOR
+SELECT h.PERIOD_NAME, l.ACCOUNT_CODE,
+       SUM(l.DEBIT_AMOUNT), SUM(l.CREDIT_AMOUNT)
+FROM GL_JE_HEADERS h, GL_JE_LINES l
+WHERE h.JE_HEADER_ID = l.JE_HEADER_ID
+  AND h.PERIOD_NAME = 'JAN-25'
+GROUP BY h.PERIOD_NAME, l.ACCOUNT_CODE;
+
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE','TB_BEFORE','ALL'));
+
+
+DELETE FROM PLAN_TABLE WHERE STATEMENT_ID = 'TB_AFTER';
+
+EXPLAIN PLAN SET STATEMENT_ID = 'TB_AFTER' FOR
+SELECT h.PERIOD_NAME, l.ACCOUNT_CODE,
+       SUM(l.DEBIT_AMOUNT), SUM(l.CREDIT_AMOUNT)
+FROM GL_JE_HEADERS h, GL_JE_LINES l
+WHERE h.JE_HEADER_ID = l.JE_HEADER_ID
+  AND h.PERIOD_NAME = 'JAN-25'
+GROUP BY h.PERIOD_NAME, l.ACCOUNT_CODE;
+
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE','TB_AFTER','ALL'));
