@@ -1,0 +1,18 @@
+# Oracle / SQL Developer
+*.log
+*.trc
+*.dmp
+
+# SQL Developer user/workspace files
+.sqldeveloper/
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
