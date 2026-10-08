@@ -148,4 +148,4 @@ automation and query performance.
 
 **Narmin Hagverdi**
 
-Oracle SQL / PL/SQL learning project focused on ERP Financial Reporting.
+Oracle SQL/PL/SQL project simulating ERP financial reporting
