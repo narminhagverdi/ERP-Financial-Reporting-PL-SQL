@@ -146,6 +146,6 @@ automation and query performance.
 
 ## Author
 
-**Narmin Hagverdi**
+**Narmin Hagverdiyeva**
 
 Oracle SQL/PL/SQL project simulating ERP financial reporting
